@@ -1,0 +1,4 @@
+/* Plain-text compose: one pre-wrap body; let every line follow its first strong character. */
+body[style*="pre-wrap"] {
+  unicode-bidi: plaintext;
+}

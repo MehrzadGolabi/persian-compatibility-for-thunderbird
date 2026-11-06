@@ -19,6 +19,15 @@ let calendarPrefs = {
 };
 
 /*
+Right-to-left support for reading and writing mail (rtl/*.js, rtl/*.css), registered
+through Thunderbird's own composeScripts / messageDisplayScripts APIs so it can be switched off.
+*/
+let rtlPrefs = {
+  enabled: true,
+};
+let rtlRegistrations = [];
+
+/*
 Generic error logger.
 */
 function onError(e) {
@@ -66,6 +75,46 @@ async function applyCalendar(newPrefs) {
   }
 }
 
+async function loadRtlSettings() {
+  const stored = await browser.storage.local.get("rtlPrefs");
+  if (stored.rtlPrefs) {
+    rtlPrefs = { ...rtlPrefs, ...stored.rtlPrefs };
+  }
+}
+
+/*
+Register (or unregister) the RTL scripts for the compose editor and message display.
+Called on startup and by the options page.
+*/
+async function applyRtl(newPrefs) {
+  if (newPrefs) {
+    rtlPrefs = { ...rtlPrefs, ...newPrefs };
+  }
+  for (const registration of rtlRegistrations.splice(0)) {
+    try {
+      await registration.unregister();
+    } catch (e) {
+      onError(e);
+    }
+  }
+  if (!rtlPrefs.enabled) {
+    return;
+  }
+  rtlRegistrations.push(
+    await browser.composeScripts.register({
+      js: [{ file: "rtl/common.js" }, { file: "rtl/compose.js" }],
+      css: [{ file: "rtl/compose.css" }],
+    })
+  );
+  rtlRegistrations.push(
+    await browser.messageDisplayScripts.register({
+      js: [{ file: "rtl/common.js" }, { file: "rtl/display.js" }],
+      css: [{ file: "rtl/display.css" }],
+      runAt: "document_end",
+    })
+  );
+}
+
 /*
 (Re)create the column with the given settings. Called by the options page.
 */
@@ -99,4 +148,8 @@ loadSettings()
   // The calendar is independent of the column: a failure in one must not stop the other.
   .then(() => loadCalendarSettings())
   .then(() => applyCalendar())
+  .catch(onError)
+  // Likewise for the mail RTL support.
+  .then(() => loadRtlSettings())
+  .then(() => applyRtl())
   .catch(onError);

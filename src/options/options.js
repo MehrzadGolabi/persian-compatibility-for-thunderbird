@@ -4,6 +4,7 @@ const showTimeInput = document.querySelector("#showTime");
 const weekDayInput = document.querySelector("#weekDay");
 const englishNumbersInput = document.querySelector("#englishNumbers");
 const calendarEnabledInput = document.querySelector("#calendarEnabled");
+const rtlEnabledInput = document.querySelector("#rtlEnabled");
 const calendarPersianTextInput = document.querySelector("#calendarPersianText");
 
 /*
@@ -35,6 +36,16 @@ function storeCalendarSettings() {
   browser.extension.getBackgroundPage().applyCalendar(calendarPrefs);
 }
 
+function storeRtlSettings() {
+  const rtlPrefs = { enabled: rtlEnabledInput.checked };
+  browser.storage.local.set({ rtlPrefs });
+  browser.extension.getBackgroundPage().applyRtl(rtlPrefs);
+}
+
+function updateRtlUI(restored) {
+  rtlEnabledInput.checked = { enabled: true, ...restored.rtlPrefs }.enabled;
+}
+
 function updateCalendarUI(restored) {
   const prefs = { enabled: true, persianText: false, ...restored.calendarPrefs };
   calendarEnabledInput.checked = prefs.enabled;
@@ -62,6 +73,7 @@ On opening the options page, fetch stored settings and update the UI with them.
 */
 browser.storage.local.get().then(updateUI, onError);
 browser.storage.local.get("calendarPrefs").then(updateCalendarUI, onError);
+browser.storage.local.get("rtlPrefs").then(updateRtlUI, onError);
 
 /*
 On blur, save the currently selected settings.
@@ -71,5 +83,6 @@ twoDigitYearInput.addEventListener("change", storeSettings);
 showTimeInput.addEventListener("change", storeSettings);
 weekDayInput.addEventListener("change", storeSettings);
 englishNumbersInput.addEventListener("change", storeSettings);
+rtlEnabledInput.addEventListener("change", storeRtlSettings);
 calendarEnabledInput.addEventListener("change", storeCalendarSettings);
 calendarPersianTextInput.addEventListener("change", storeCalendarSettings);

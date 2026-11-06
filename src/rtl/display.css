@@ -1,0 +1,16 @@
+/*
+ * Message display: plain-text bodies are one big <pre> (or flowed div) where every
+ * line can have its own direction, so let each line pick it from its first strong
+ * character. (HTML messages are handled by display.js with dir="auto".)
+ */
+pre.moz-quote-pre,
+pre.moz-signature,
+.moz-text-plain pre,
+.moz-text-flowed {
+  unicode-bidi: plaintext;
+}
+
+/* Thunderbird/UA styles give list items an explicit left alignment: follow the direction. */
+li[dir] {
+  text-align: start;
+}
