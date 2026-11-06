@@ -59,6 +59,7 @@ const sharedPatches = [];
 let localeObserver = null;
 let listenerRegistered = false;
 let documentObserver = null;
+let printObserver = null;
 /** The helpers of the current enable(): lets late callbacks detect they are stale. */
 let currentHelpers = null;
 
@@ -359,20 +360,6 @@ function patchFormatter(cal, H) {
   }
 }
 
-// Minimonths that must stay Gregorian:
-// - The print dialog's range pickers sit next to Gregorian month/year <select>s that call
-//   switchMonth()/switchYear() with Gregorian indexes.
-// - The recurrence dialog's read-only preview minimonths use their year/month attributes
-//   as Gregorian keys; only the minimonth inside its "until" date picker is Persian.
-const GREGORIAN_MINIMONTHS = ["from-minimonth", "to-minimonth"];
-function isGregorianMinimonth(el) {
-  return (
-    GREGORIAN_MINIMONTHS.includes(el.id) ||
-    (el.ownerDocument.documentURI.endsWith("calendar-event-dialog-recurrence.xhtml") &&
-      !el.closest("datepicker"))
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Per-window patches (calendar custom elements live in messenger.xhtml)
 // ---------------------------------------------------------------------------
@@ -389,14 +376,7 @@ function patchWindow(win, H, kind) {
     throw new Error("calendar-minimonth is not defined");
   }
   const mm = Minimonth.prototype;
-  const pm = (name, fn) => {
-    const orig = mm[name];
-    p(mm, name, function (...args) {
-      return isGregorianMinimonth(this) ? orig.apply(this, args) : fn.apply(this, args);
-    });
-  };
-
-  pm("showMonth", function (aDate) {
+  p(mm, "showMonth", function (aDate) {
     aDate = firstOfMonth(new Date(aDate || this.mExtraDate));
     // Don't fire the monthchange event upon initialization.
     const monthChanged = this.mEditorDate && this.mEditorDate.valueOf() != aDate.valueOf();
@@ -525,7 +505,7 @@ function patchWindow(win, H, kind) {
     }
   });
 
-  pm("updateAccessibleLabel", function () {
+  p(mm, "updateAccessibleLabel", function () {
     if (this.mValue) {
       this.removeAttribute("data-l10n-id");
       this.setAttribute("aria-label", format({ dateStyle: "long" }, this.mValue));
@@ -534,24 +514,24 @@ function patchWindow(win, H, kind) {
     }
   });
 
-  pm("advanceMonth", function (aDir) {
+  p(mm, "advanceMonth", function (aDir) {
     this.showMonth(toJS(toPD(this.mEditorDate).add({ months: aDir })));
   });
-  pm("advanceYear", function (aDir) {
+  p(mm, "advanceYear", function (aDir) {
     this.showMonth(toJS(toPD(this.mEditorDate).add({ years: aDir })));
   });
-  pm("switchMonth", function (aMonth) {
+  p(mm, "switchMonth", function (aMonth) {
     this.showMonth(toJS(toPD(this.mEditorDate).with({ month: aMonth + 1 })));
   });
-  pm("switchYear", function (aYear) {
+  p(mm, "switchYear", function (aYear) {
     this.showMonth(toJS(toPD(this.mEditorDate).with({ year: aYear })));
   });
-  pm("moveDateByOffset", function (aYears, aMonths, aDays) {
+  p(mm, "moveDateByOffset", function (aYears, aMonths, aDays) {
     const pd = toPD(this.mFocused.date).add({ years: aYears, months: aMonths }).add({ days: aDays });
     this.focusDate(toJS(pd));
   });
 
-  pm("selectDate", function (aDate, aMainDate) {
+  p(mm, "selectDate", function (aDate, aMainDate) {
     if (aMainDate) {
       // Month-like views: the "main" month is the one with the most visible days.
       // The caller computed it with Gregorian months; redo it with Persian ones.
@@ -654,6 +634,10 @@ function patchWindow(win, H, kind) {
     for (const dp of win.document.querySelectorAll("datepicker")) {
       hook(dp); // pickers that were connected before we patched
     }
+  }
+
+  if (win.document.documentURI.endsWith("calendar-event-dialog-recurrence.xhtml")) {
+    patchRecurrencePreview(win, H, p);
   }
 
   if (kind != "main") {
@@ -772,13 +756,145 @@ function patchWindow(win, H, kind) {
   }
 }
 
+/** The add-on's base URL (set when the API is created), to find its helper script. */
+let extensionBase = null;
+let helperScript = null;
+
+/** Compile (once) the helper that hands out the recurrence dialog's RecurrencePreview. */
+async function loadHelperScript() {
+  if (!helperScript) {
+    helperScript = await ChromeUtils.compileScript(`${extensionBase}api/recurrence-preview.js`);
+  }
+}
+
+/**
+ * The recurrence dialog's `RecurrencePreview` is a top-level `const`, so it is not a window
+ * property, and the dialog's CSP blocks eval. A small script of ours, executed in that window's
+ * global (as Thunderbird does for content scripts), can see it and hand it out.
+ */
+function getRecurrencePreview(win) {
+  helperScript.executeInGlobal(win);
+  const value = win.__mahoorRecurrencePreview;
+  delete win.__mahoorRecurrencePreview;
+  return value;
+}
+
+/**
+ * The recurrence dialog previews the occurrences in nine read-only minimonths. It steps through
+ * Gregorian months by itself, so replace those few methods with Persian-month versions.
+ * (The recurrence *rules* stay Gregorian: that is what iCalendar can express.)
+ * Adapted from calendar-event-dialog-recurrence.js (MPL 2.0).
+ */
+function patchRecurrencePreview(win, H, p) {
+  const Preview = getRecurrencePreview(win);
+  if (!Preview) {
+    throw new Error("RecurrencePreview not found");
+  }
+  const { toPD, toJS, dtToPD, firstOfMonth, cal } = H;
+  // The minimonths are keyed by the Gregorian year/month of the first day of the Persian month
+  // they show. Those first days fall in different Gregorian months, and the 25th of that
+  // Gregorian month is always inside the Persian month that started in it.
+  const firstDayOfKey = (year, month) =>
+    toPD(new Date(parseInt(year, 10), parseInt(month, 10), 25, 12, 34)).with({ day: 1 });
+
+  p(Preview, "nextMonthDate", (year, month) => toJS(firstDayOfKey(year, month).add({ months: 1 })));
+  p(Preview, "previousMonthDate", (year, month) =>
+    toJS(firstDayOfKey(year, month).add({ months: -1 }))
+  );
+
+  const origDisplayCurrentMonths = Preview.displayCurrentMonths;
+  p(Preview, "displayCurrentMonths", function (activeDate) {
+    return origDisplayCurrentMonths.call(this, firstOfMonth(activeDate));
+  });
+
+  p(Preview, "updateContent", function () {
+    let date = firstOfMonth(cal.dtz.dateTimeToJsDate(this.dateTime));
+    for (const minimonth of this.node.children) {
+      minimonth.showMonth(date);
+      date = toJS(toPD(date).add({ months: 1 }));
+    }
+  });
+
+  p(Preview, "updatePreview", function (recurrenceInfo) {
+    const calMinimonth = this.node.querySelector("calendar-minimonth");
+    this.node.style.minHeight = calMinimonth.getBoundingClientRect().height + "px";
+    this.mRecurrenceInfo = recurrenceInfo;
+
+    const dayStart = pd => {
+      const g = pd.withCalendar("iso8601");
+      const c = this.dateTime.clone();
+      c.resetTo(g.year, g.month - 1, g.day, 0, 0, 0, c.timezone);
+      return c;
+    };
+    let pd = dtToPD(this.dateTime).with({ day: 1 });
+    let start = dayStart(pd);
+    let end = dayStart(pd.add({ months: 1 }));
+
+    for (const minimonth of this.node.children) {
+      // 'start' and 'end' are the interval this minimonth shows (one Persian month).
+      minimonth.showMonth(cal.dtz.dateTimeToJsDate(start));
+      if (recurrenceInfo) {
+        const dates = recurrenceInfo.getOccurrenceDates(start, end, 0);
+        let index = 0;
+        let occurrence = null;
+        if (index < dates.length) {
+          occurrence = dates[index++].getInTimezone(start.timezone);
+        }
+        const current = start.clone();
+        while (current.compare(end) < 0) {
+          const box = minimonth.getBoxForDate(current);
+          if (box) {
+            if (
+              occurrence &&
+              occurrence.day == current.day &&
+              occurrence.month == current.month &&
+              occurrence.year == current.year
+            ) {
+              box.setAttribute("busy", 1);
+              if (index < dates.length) {
+                occurrence = dates[index++].getInTimezone(start.timezone);
+                // The very next occurrence can happen on the same day as the previous one.
+                if (
+                  occurrence.day == current.day &&
+                  occurrence.month == current.month &&
+                  occurrence.year == current.year
+                ) {
+                  continue;
+                }
+              } else {
+                occurrence = null;
+              }
+            } else {
+              box.removeAttribute("busy");
+            }
+          }
+          current.day++;
+        }
+      }
+      pd = pd.add({ months: 1 });
+      start = end;
+      end = dayStart(pd.add({ months: 1 }));
+    }
+  });
+}
+
 /** Re-render what is already on screen after patching or unpatching. */
 function refreshWindow(win) {
   for (const mm of win.document.querySelectorAll("calendar-minimonth")) {
-    if (mm.dayBoxes && !isGregorianMinimonth(mm)) {
+    if (mm.dayBoxes) {
       // Same as the minimonth's own reaction to a preference change.
       mm.dayBoxes.clear();
       mm.refreshDisplay();
+    }
+  }
+  if (win.document.documentURI.endsWith("calendar-event-dialog-recurrence.xhtml")) {
+    try {
+      const preview = getRecurrencePreview(win);
+      if (preview && preview.node && preview.mDateTime) {
+        preview.updatePreview(preview.mRecurrenceInfo);
+      }
+    } catch (ex) {
+      log("warn", "Mahoor: could not refresh the recurrence preview", ex);
     }
   }
   for (const dp of win.document.querySelectorAll("datepicker")) {
@@ -867,8 +983,8 @@ function applyToWindow(win, H, kind) {
   }
   // "datepicker" itself is not a valid name for whenDefined() (no hyphen). datetimepickers.js
   // defines it right after menulist-editable, and our callback is queued after its own.
-  const names = kind == "main" ? ["calendar-minimonth"] : ["calendar-minimonth", "menulist-editable"];
-  Promise.all(names.map(n => win.customElements.whenDefined(n))).then(
+  const names = kind == "picker" ? ["calendar-minimonth", "menulist-editable"] : ["calendar-minimonth"];
+  Promise.all([loadHelperScript(), ...names.map(n => win.customElements.whenDefined(n))]).then(
     () => {
       // Still enabled with the same settings, window still alive and not patched yet?
       if (H !== currentHelpers || win.closed || patchedWindows.has(win)) {
@@ -891,6 +1007,10 @@ function applyToWindow(win, H, kind) {
 
 function disableAll() {
   currentHelpers = null;
+  if (printObserver) {
+    Services.obs.removeObserver(printObserver, "subdialog-loaded");
+    printObserver = null;
+  }
   if (documentObserver) {
     Services.obs.removeObserver(documentObserver, "chrome-document-loaded");
     documentObserver = null;
@@ -965,6 +1085,31 @@ function enableAll(options) {
       },
     };
     Services.obs.addObserver(documentObserver, "chrome-document-loaded");
+
+    // The calendar's print dialog (print.html): Thunderbird loads the calendar-minimonth element
+    // into it only when printing a calendar, after the "print-settings" event (see calPrintUtils).
+    // Its date-range pickers only supply dates, so they can be Persian.
+    printObserver = {
+      async observe(dialogWindow) {
+        try {
+          if (!dialogWindow.location.href.startsWith("chrome://global/content/print.html")) {
+            return;
+          }
+          await new Promise(resolve =>
+            dialogWindow.document.addEventListener("print-settings", resolve, { once: true })
+          );
+          if (
+            dialogWindow.PrintEventHandler?.activeCurrentURI ==
+            "chrome://calendar/content/printing-template.html"
+          ) {
+            applyToWindow(dialogWindow, H, "print");
+          }
+        } catch (ex) {
+          log("warn", "Mahoor: could not inspect the print dialog", ex);
+        }
+      },
+    };
+    Services.obs.addObserver(printObserver, "subdialog-loaded");
     // ...and the ones that are already open.
     for (const win of chromeWindowsDeep()) {
       try {
@@ -994,6 +1139,7 @@ function rollbackAfterFailure() {
 return class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
     context.callOnClose(this);
+    extensionBase = context.extension.baseURL;
     return {
       persianCalendar: {
         async enable(options) {
