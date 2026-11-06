@@ -1,0 +1,36 @@
+[
+  {
+    "namespace": "persianCalendar",
+    "functions": [
+      {
+        "name": "enable",
+        "type": "function",
+        "async": true,
+        "description": "Show the Persian (Jalali) calendar in the Thunderbird calendar UI. Calling it again re-applies with the new options. Resolves to { enabled, reason }.",
+        "parameters": [
+          {
+            "name": "options",
+            "type": "object",
+            "properties": {
+              "persianText": {
+                "type": "boolean",
+                "description": "Use Persian (fa) month/weekday names instead of the Thunderbird UI language."
+              },
+              "englishNumbers": {
+                "type": "boolean",
+                "description": "Use Latin digits instead of Persian digits (only with persianText)."
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "disable",
+        "type": "function",
+        "async": true,
+        "description": "Restore the Gregorian calendar UI.",
+        "parameters": []
+      }
+    ]
+  }
+]

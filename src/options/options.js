@@ -3,6 +3,8 @@ const twoDigitYearInput = document.querySelector("#twoDigitYear");
 const showTimeInput = document.querySelector("#showTime");
 const weekDayInput = document.querySelector("#weekDay");
 const englishNumbersInput = document.querySelector("#englishNumbers");
+const calendarEnabledInput = document.querySelector("#calendarEnabled");
+const calendarPersianTextInput = document.querySelector("#calendarPersianText");
 
 /*
 Store the currently selected settings using browser.storage.local.
@@ -19,6 +21,24 @@ function storeSettings() {
     datePrefrences: newSettings,
   });
   browser.extension.getBackgroundPage().repaint(newSettings);
+}
+
+/*
+Calendar settings are stored apart from the column settings.
+*/
+function storeCalendarSettings() {
+  const calendarPrefs = {
+    enabled: calendarEnabledInput.checked,
+    persianText: calendarPersianTextInput.checked,
+  };
+  browser.storage.local.set({ calendarPrefs });
+  browser.extension.getBackgroundPage().applyCalendar(calendarPrefs);
+}
+
+function updateCalendarUI(restored) {
+  const prefs = { enabled: true, persianText: false, ...restored.calendarPrefs };
+  calendarEnabledInput.checked = prefs.enabled;
+  calendarPersianTextInput.checked = prefs.persianText;
 }
 
 /*
@@ -41,6 +61,7 @@ function onError(e) {
 On opening the options page, fetch stored settings and update the UI with them.
 */
 browser.storage.local.get().then(updateUI, onError);
+browser.storage.local.get("calendarPrefs").then(updateCalendarUI, onError);
 
 /*
 On blur, save the currently selected settings.
@@ -50,3 +71,5 @@ twoDigitYearInput.addEventListener("change", storeSettings);
 showTimeInput.addEventListener("change", storeSettings);
 weekDayInput.addEventListener("change", storeSettings);
 englishNumbersInput.addEventListener("change", storeSettings);
+calendarEnabledInput.addEventListener("change", storeCalendarSettings);
+calendarPersianTextInput.addEventListener("change", storeCalendarSettings);
