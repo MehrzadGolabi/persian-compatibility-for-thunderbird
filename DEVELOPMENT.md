@@ -1,6 +1,6 @@
 # Development
 
-Notes for working on the Thunderbird Persian compatibility add-on. For installing and using it, see the
+Notes for working on Persian Compatibility for Thunderbird. For installing and using it, see the
 [README](README.md).
 
 ## Layout
@@ -40,7 +40,7 @@ The add-on reuses what Thunderbird and Firefox already provide instead of reimpl
 The add-on is the contents of `src/` zipped into an XPI:
 
 ```sh
-cd src && zip -r -X ../thunderbird-persian-compatibility.xpi . -x '.*'
+cd src && zip -r -X ../persian-compatibility-for-thunderbird.xpi . -x '.*'
 ```
 
 ## Try a change
@@ -66,8 +66,8 @@ Releases are built by GitHub Actions (`.github/workflows/release.yml`).
    ```
 
 3. The workflow checks that the tag matches the manifest, builds
-   `thunderbird-persian-compatibility-<version>.xpi` and publishes it on the
-   [releases](https://github.com/MehrzadGolabi/thunderbird-persian-compatibility/releases) page with generated
+   `persian-compatibility-for-thunderbird-<version>.xpi` and publishes it on the
+   [releases](https://github.com/MehrzadGolabi/persian-compatibility-for-thunderbird/releases) page with generated
    release notes.
 
 The workflow can also be started by hand from the **Actions** tab; that only builds the XPI and attaches it to the

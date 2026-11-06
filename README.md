@@ -1,4 +1,4 @@
-# Thunderbird Persian compatibility add-on
+# Persian Compatibility for Thunderbird
 
 [فارسی](README.fa.md)
 
@@ -25,10 +25,10 @@ When you install it, Thunderbird will ask for permission to *read and modify mes
 ## Install
 
 1. Download the XPI from the
-   [releases](https://github.com/MehrzadGolabi/thunderbird-persian-compatibility/releases/) page, or build it yourself:
+   [releases](https://github.com/MehrzadGolabi/persian-compatibility-for-thunderbird/releases/) page, or build it yourself:
 
    ```sh
-   cd src && zip -r ../thunderbird-persian-compatibility.xpi .
+   cd src && zip -r ../persian-compatibility-for-thunderbird.xpi .
    ```
 
 2. In Thunderbird open **Tools > Add-ons and Themes**, click the gear and choose **Install Add-on From File...**

@@ -32,7 +32,7 @@ jobs:
       - name: Build the XPI
         run: |
           mkdir -p dist
-          (cd src && zip -r -X "../dist/thunderbird-persian-compatibility-${{ steps.manifest.outputs.version }}.xpi" . -x '.*')
+          (cd src && zip -r -X "../dist/persian-compatibility-for-thunderbird-${{ steps.manifest.outputs.version }}.xpi" . -x '.*')
           unzip -l dist/*.xpi | tail -n 3
 
       - name: Upload the XPI as a workflow artifact

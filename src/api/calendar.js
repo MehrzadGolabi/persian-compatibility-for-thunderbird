@@ -36,7 +36,7 @@ function log(level, ...args) {
   try {
     globalThis.console[level](...args);
   } catch (ex) {
-    Services.console.logStringMessage(`Mahoor [${level}] ${args.join(" ")}`);
+    Services.console.logStringMessage(`Persian Compatibility [${level}] ${args.join(" ")}`);
   }
 }
 
@@ -894,7 +894,7 @@ function refreshWindow(win) {
         preview.updatePreview(preview.mRecurrenceInfo);
       }
     } catch (ex) {
-      log("warn", "Mahoor: could not refresh the recurrence preview", ex);
+      log("warn", "could not refresh the recurrence preview", ex);
     }
   }
   for (const dp of win.document.querySelectorAll("datepicker")) {
@@ -941,7 +941,7 @@ function refreshWindow(win) {
         view.relayout();
       }
     } catch (ex) {
-      log("warn", "Mahoor: could not refresh calendar view", ex);
+      log("warn", "could not refresh calendar view", ex);
     }
   }
 }
@@ -994,14 +994,14 @@ function applyToWindow(win, H, kind) {
         patchWindow(win, H, kind);
       } catch (ex) {
         // Atomic: undo every patch (this window's partial ones and all the others).
-        log("error", "Mahoor: Persian calendar not applied, staying Gregorian:", ex);
+        log("error", "Persian calendar not applied, staying Gregorian:", ex);
         rollbackAfterFailure();
         return;
       }
       win.addEventListener("unload", () => patchedWindows.delete(win), { once: true });
       refreshWindow(win);
     },
-    ex => log("error", "Mahoor: calendar elements never became ready:", ex)
+    ex => log("error", "calendar elements never became ready:", ex)
   );
 }
 
@@ -1080,7 +1080,7 @@ function enableAll(options) {
             applyToWindow(doc.defaultView, H, "picker");
           }
         } catch (ex) {
-          log("warn", "Mahoor: could not inspect a new document", ex);
+          log("warn", "could not inspect a new document", ex);
         }
       },
     };
@@ -1105,7 +1105,7 @@ function enableAll(options) {
             applyToWindow(dialogWindow, H, "print");
           }
         } catch (ex) {
-          log("warn", "Mahoor: could not inspect the print dialog", ex);
+          log("warn", "could not inspect the print dialog", ex);
         }
       },
     };
@@ -1121,7 +1121,7 @@ function enableAll(options) {
       }
     }
   } catch (ex) {
-    log("error", "Mahoor: Persian calendar not applied, staying Gregorian:", ex);
+    log("error", "Persian calendar not applied, staying Gregorian:", ex);
     disableAll();
     return { enabled: false, reason: String(ex) };
   }
@@ -1151,7 +1151,7 @@ return class extends ExtensionCommon.ExtensionAPI {
           } catch (ex) {
             // Never leave a half-patched calendar behind.
             disableAll();
-            log("error", "Mahoor: Persian calendar not applied:", ex);
+            log("error", "Persian calendar not applied:", ex);
             return { enabled: false, reason: `${ex.message} @ ${ex.stack}` };
           }
         },
