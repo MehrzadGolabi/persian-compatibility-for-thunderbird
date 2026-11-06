@@ -134,7 +134,12 @@ var customColumns = class extends ExtensionCommon.ExtensionAPI {
     return {
       customColumns: {
         async add(id, name, field, datePrefrences) {
-          ids.push(id);
+          // Re-adding (e.g. after an options change) replaces the existing column.
+          if (ids.includes(id)) {
+            ThreadPaneColumns.removeCustomColumn(id);
+          } else {
+            ids.push(id);
+          }
 
           function persianDate(message) {
             return persianDateConverter(
@@ -167,7 +172,10 @@ var customColumns = class extends ExtensionCommon.ExtensionAPI {
 
         async remove(id) {
           ThreadPaneColumns.removeCustomColumn(id);
-          ids.remove(id);
+          const index = ids.indexOf(id);
+          if (index >= 0) {
+            ids.splice(index, 1);
+          }
         },
       },
     };

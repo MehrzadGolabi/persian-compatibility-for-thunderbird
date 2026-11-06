@@ -17,20 +17,25 @@ function onError(e) {
 }
 
 /*
-On startup, check whether we have stored settings.
-If we don't, then store the default settings.
+Load stored settings (falling back to / filling in the defaults) and
+store the defaults on first run.
 */
-function checkStoredSettings(storedSettings) {
-  if (!storedSettings.datePrefrences) {
-    browser.storage.local.set({ datePrefrences: datePrefrences });
+async function loadSettings() {
+  const stored = await browser.storage.local.get();
+  if (!stored.datePrefrences) {
+    await browser.storage.local.set({ datePrefrences: datePrefrences });
   } else {
-    datePrefrences = storedSettings.datePrefrences;
+    datePrefrences = { ...datePrefrences, ...stored.datePrefrences };
   }
 }
 
-function repaint(newSettings) {
-  browser.customColumns.remove("persianDateColumn");
-  browser.customColumns.add(
+/*
+(Re)create the column with the given settings. Called by the options page.
+*/
+async function repaint(newSettings) {
+  datePrefrences = newSettings;
+  await browser.customColumns.remove("persianDateColumn");
+  await browser.customColumns.add(
     "persianDateColumn",
     "Persian Date",
     "persianDate",
@@ -38,11 +43,17 @@ function repaint(newSettings) {
   );
 }
 
-browser.storage.local.get().then(checkStoredSettings, onError);
-
-browser.customColumns.add(
-  "persianDateColumn",
-  "Persian Date",
-  "persianDate",
-  datePrefrences
-);
+/*
+On startup, read the stored settings first so the column is created with them.
+*/
+loadSettings()
+  .catch(onError)
+  .then(() =>
+    browser.customColumns.add(
+      "persianDateColumn",
+      "Persian Date",
+      "persianDate",
+      datePrefrences
+    )
+  )
+  .catch(onError);
