@@ -40,6 +40,7 @@ function log(level, ...args) {
   }
 }
 
+const MIN_TESTED_MAJOR = 159;
 const LISTENER_ID = "mahoor-persian-calendar";
 const MESSENGER_URL = "chrome://messenger/content/messenger.xhtml";
 
@@ -299,8 +300,17 @@ function patchWindow(win, H) {
     throw new Error("calendar-minimonth is not defined");
   }
   const mm = Minimonth.prototype;
+  // The print dialog's range pickers sit next to Gregorian month/year <select>s that call
+  // switchMonth()/switchYear() with Gregorian indexes, so they must stay Gregorian.
+  const GREGORIAN_MINIMONTHS = ["from-minimonth", "to-minimonth"];
+  const pm = (name, fn) => {
+    const orig = mm[name];
+    p(mm, name, function (...args) {
+      return GREGORIAN_MINIMONTHS.includes(this.id) ? orig.apply(this, args) : fn.apply(this, args);
+    });
+  };
 
-  p(mm, "showMonth", function (aDate) {
+  pm("showMonth", function (aDate) {
     aDate = firstOfMonth(new Date(aDate || this.mExtraDate));
     // Don't fire the monthchange event upon initialization.
     const monthChanged = this.mEditorDate && this.mEditorDate.valueOf() != aDate.valueOf();
@@ -429,7 +439,7 @@ function patchWindow(win, H) {
     }
   });
 
-  p(mm, "updateAccessibleLabel", function () {
+  pm("updateAccessibleLabel", function () {
     if (this.mValue) {
       this.removeAttribute("data-l10n-id");
       this.setAttribute("aria-label", format({ dateStyle: "long" }, this.mValue));
@@ -438,24 +448,24 @@ function patchWindow(win, H) {
     }
   });
 
-  p(mm, "advanceMonth", function (aDir) {
+  pm("advanceMonth", function (aDir) {
     this.showMonth(toJS(toPD(this.mEditorDate).add({ months: aDir })));
   });
-  p(mm, "advanceYear", function (aDir) {
+  pm("advanceYear", function (aDir) {
     this.showMonth(toJS(toPD(this.mEditorDate).add({ years: aDir })));
   });
-  p(mm, "switchMonth", function (aMonth) {
+  pm("switchMonth", function (aMonth) {
     this.showMonth(toJS(toPD(this.mEditorDate).with({ month: aMonth + 1 })));
   });
-  p(mm, "switchYear", function (aYear) {
+  pm("switchYear", function (aYear) {
     this.showMonth(toJS(toPD(this.mEditorDate).with({ year: aYear })));
   });
-  p(mm, "moveDateByOffset", function (aYears, aMonths, aDays) {
+  pm("moveDateByOffset", function (aYears, aMonths, aDays) {
     const pd = toPD(this.mFocused.date).add({ years: aYears, months: aMonths }).add({ days: aDays });
     this.focusDate(toJS(pd));
   });
 
-  p(mm, "selectDate", function (aDate, aMainDate) {
+  pm("selectDate", function (aDate, aMainDate) {
     if (aMainDate) {
       // Month-like views: the "main" month is the one with the most visible days.
       // The caller computed it with Gregorian months; redo it with Persian ones.
@@ -610,6 +620,19 @@ function refreshWindow(win) {
       mm.refreshDisplay();
     }
   }
+  // Weekday/date header labels cache their text; re-assign so they re-read the formatter.
+  for (const label of win.document.querySelectorAll("calendar-day-label")) {
+    try {
+      if (typeof label.mWeekday == "number") {
+        label.weekDay = label.mWeekday;
+      }
+      if (label.mDate) {
+        label.date = label.mDate;
+      }
+    } catch (ex) {
+      // not initialised yet
+    }
+  }
   for (const view of win.document.querySelectorAll(
     "calendar-month-view, calendar-multiweek-view, calendar-week-view, calendar-day-view"
   )) {
@@ -661,10 +684,15 @@ function disableAll() {
 function enableAll(options) {
   disableAll(); // idempotent: re-enabling with new options starts from a clean slate
 
+  // The patches replace copies of Thunderbird's own calendar code, which differs between
+  // versions: only turn them on for versions they were written and tested against.
+  if (parseInt(Services.appinfo.version, 10) < MIN_TESTED_MAJOR) {
+    return { enabled: false, reason: `The Persian calendar needs Thunderbird ${MIN_TESTED_MAJOR} or newer.` };
+  }
   const wins = [...Services.wm.getEnumerator("mail:3pane")];
   const T = wins[0]?.Temporal ?? globalThis.Temporal;
   if (!T || !hasPersianTemporal(T)) {
-    return { enabled: false, reason: "This Thunderbird has no Temporal API with a Persian calendar (needs 140+)." };
+    return { enabled: false, reason: "This Thunderbird has no Temporal API with a Persian calendar." };
   }
   const { cal } = ChromeUtils.importESModule("resource:///modules/calendar/calUtils.sys.mjs");
   const H = createHelpers(T, cal, options);
