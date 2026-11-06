@@ -43,6 +43,14 @@ function log(level, ...args) {
 const MIN_TESTED_MAJOR = 159;
 const LISTENER_ID = "mahoor-persian-calendar";
 const MESSENGER_URL = "chrome://messenger/content/messenger.xhtml";
+// Documents (including iframes) that contain date pickers.
+const PICKER_URLS = [
+  "chrome://calendar/content/calendar-item-iframe.xhtml", // event/task editor (tab, dialog)
+  "chrome://calendar/content/calendar-event-dialog-recurrence.xhtml",
+  "chrome://calendar/content/calendar-event-dialog-attendees.xhtml",
+  "chrome://calendar/content/calendar-event-dialog-reminder.xhtml",
+  "chrome://calendar/content/calendar-event-dialog-timezone.xhtml",
+];
 
 /** Windows we patched: window -> list of recorded patches. */
 const patchedWindows = new Map();
@@ -50,6 +58,9 @@ const patchedWindows = new Map();
 const sharedPatches = [];
 let localeObserver = null;
 let listenerRegistered = false;
+let documentObserver = null;
+/** The helpers of the current enable(): lets late callbacks detect they are stale. */
+let currentHelpers = null;
 
 // ---------------------------------------------------------------------------
 // Reversible patching
@@ -80,11 +91,18 @@ function patch(list, obj, key, value) {
   return orig;
 }
 
+/** Record a cleanup action (e.g. removing an event listener) next to the patches. */
+function onRestore(list, undo) {
+  list.push({ undo });
+}
+
 function restore(list) {
   while (list.length) {
-    const { obj, key, orig } = list.pop();
+    const { obj, key, orig, undo } = list.pop();
     try {
-      if (orig) {
+      if (undo) {
+        undo();
+      } else if (orig) {
         Object.defineProperty(obj, key, orig);
       } else {
         delete obj[key];
@@ -216,7 +234,63 @@ function createHelpers(T, cal, settings) {
     return monthNamesCache;
   }
 
+  // --- Date pickers: always Iranian numeric yyyy/mm/dd (Latin digits unless Persian text+digits) ---
+  const faDigits = !!settings.persianText && !settings.englishNumbers;
+  const toFa = str => str.replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]);
+  const toLatin = str =>
+    str
+      .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06f0))
+      .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660));
+  const pad = n => String(n).padStart(2, "0");
+  function formatNumeric(pd) {
+    const str = `${pd.year}/${pad(pd.month)}/${pad(pd.day)}`;
+    return faDigits ? toFa(str) : str;
+  }
+  const formatPickerDate = jsDate => formatNumeric(toPD(jsDate));
+
+  /**
+   * Parse what a user types into a date field. Accepts yyyy/mm/dd (also d/m/yyyy), any
+   * separator, Persian/Arabic/Latin digits. A year of 1700 or more is read as Gregorian,
+   * so pasting 2026-03-21 still works. Returns a local-midnight Date, or null.
+   */
+  function parsePickerDate(text) {
+    const m = /^\D*(\d+)\D+(\d+)\D+(\d+)/.exec(toLatin(String(text)));
+    if (!m) {
+      return null;
+    }
+    let y, mo, d;
+    if (m[3].length >= 3 && m[1].length < 3) {
+      [d, mo, y] = [+m[1], +m[2], +m[3]];
+    } else {
+      [y, mo, d] = [+m[1], +m[2], +m[3]];
+    }
+    try {
+      let g;
+      if (y >= 1700) {
+        g = T.PlainDate.from({ year: y, month: mo, day: d }, { overflow: "reject" });
+      } else {
+        if (y < 100) {
+          // Two-digit year: within 30 years ahead / 69 back, like the stock picker.
+          const cur = toPD(new Date()).year;
+          y += cur - (cur % 100);
+          if (y < cur - 69) {
+            y += 100;
+          }
+          if (y > cur + 30) {
+            y -= 100;
+          }
+        }
+        g = T.PlainDate.from({ calendar: "persian", year: y, month: mo, day: d }, { overflow: "reject" })
+          .withCalendar("iso8601");
+      }
+      return new Date(g.year, g.month - 1, g.day);
+    } catch (ex) {
+      return null;
+    }
+  }
+
   return {
+    formatNumeric, formatPickerDate, parsePickerDate,
     fmt, format, formatRange, formatDT, adjustedJsDate, tzOption, isRelative,
     toPD, toJS, dtToPD, pdToDT, monthKey, firstOfMonth, monthNames, locale, cal,
   };
@@ -232,7 +306,8 @@ function patchFormatter(cal, H) {
   const f = cal.dtz.formatter;
   const p = (key, fn) => patch(sharedPatches, f, key, fn);
 
-  p("formatDateShort", dt => H.formatDT(dt, { dateStyle: "short" }));
+  // Short dates: the Iranian numeric yyyy/mm/dd (also what the date pickers show/accept).
+  p("formatDateShort", dt => H.formatNumeric(H.dtToPD(dt)));
   p("formatDateLong", dt => H.formatDT(dt, { dateStyle: "full" }));
   p("formatDateWithoutYear", dt => H.formatDT(dt, { month: "short", day: "numeric" }));
   p("formatDateLongWithoutYear", dt =>
@@ -284,11 +359,25 @@ function patchFormatter(cal, H) {
   }
 }
 
+// Minimonths that must stay Gregorian:
+// - The print dialog's range pickers sit next to Gregorian month/year <select>s that call
+//   switchMonth()/switchYear() with Gregorian indexes.
+// - The recurrence dialog's read-only preview minimonths use their year/month attributes
+//   as Gregorian keys; only the minimonth inside its "until" date picker is Persian.
+const GREGORIAN_MINIMONTHS = ["from-minimonth", "to-minimonth"];
+function isGregorianMinimonth(el) {
+  return (
+    GREGORIAN_MINIMONTHS.includes(el.id) ||
+    (el.ownerDocument.documentURI.endsWith("calendar-event-dialog-recurrence.xhtml") &&
+      !el.closest("datepicker"))
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Per-window patches (calendar custom elements live in messenger.xhtml)
 // ---------------------------------------------------------------------------
 
-function patchWindow(win, H) {
+function patchWindow(win, H, kind) {
   const list = [];
   patchedWindows.set(win, list);
   const p = (obj, key, value) => patch(list, obj, key, value);
@@ -300,13 +389,10 @@ function patchWindow(win, H) {
     throw new Error("calendar-minimonth is not defined");
   }
   const mm = Minimonth.prototype;
-  // The print dialog's range pickers sit next to Gregorian month/year <select>s that call
-  // switchMonth()/switchYear() with Gregorian indexes, so they must stay Gregorian.
-  const GREGORIAN_MINIMONTHS = ["from-minimonth", "to-minimonth"];
   const pm = (name, fn) => {
     const orig = mm[name];
     p(mm, name, function (...args) {
-      return GREGORIAN_MINIMONTHS.includes(this.id) ? orig.apply(this, args) : fn.apply(this, args);
+      return isGregorianMinimonth(this) ? orig.apply(this, args) : fn.apply(this, args);
     });
   };
 
@@ -516,6 +602,64 @@ function patchWindow(win, H) {
     }
   });
 
+  // ----- date pickers (text field + popup) ---------------------------------
+  // The popup is a minimonth (patched above). The text field formats and parses through
+  // functions private to datetimepickers.js, so: replace the formatting setter, and take
+  // over the field's "change" event (capture phase, before the stock handler) to parse.
+  const Datepicker = win.customElements.get("datepicker");
+  if (Datepicker) {
+    const dpProto = Datepicker.prototype;
+    p(dpProto, "_inputBoxValue", {
+      set(val) {
+        if (val == "forever") {
+          this._inputField.value = this._foreverItem.label;
+          return;
+        }
+        this._inputField.value = H.formatPickerDate(val);
+      },
+    });
+    const hook = dp => {
+      if (!dp._menulist || dp._mahoorHooked) {
+        return;
+      }
+      const onChange = event => {
+        // Only the text field's own change event. Not the picker's re-dispatched one
+        // (target is the picker) and not the popup minimonth's change events.
+        if (event.target == dp || dp._popup.contains(event.target)) {
+          return;
+        }
+        event.stopImmediatePropagation();
+        event.stopPropagation();
+        const value = H.parsePickerDate(dp._inputBoxValue);
+        if (!value) {
+          dp._inputBoxValue = dp._minimonthValue; // not a date: put the old one back
+          return;
+        }
+        dp._inputBoxValue = dp._minimonthValue = value;
+        dp._valueIsForever = false;
+        dp.dispatchEvent(new win.CustomEvent("change", { bubbles: true }));
+      };
+      dp._mahoorHooked = true;
+      dp.addEventListener("change", onChange, true);
+      onRestore(list, () => {
+        dp.removeEventListener("change", onChange, true);
+        delete dp._mahoorHooked;
+      });
+    };
+    const origConnected = dpProto.connectedCallback;
+    p(dpProto, "connectedCallback", function () {
+      origConnected.call(this);
+      hook(this);
+    });
+    for (const dp of win.document.querySelectorAll("datepicker")) {
+      hook(dp); // pickers that were connected before we patched
+    }
+  }
+
+  if (kind != "main") {
+    return;
+  }
+
   // ----- month view --------------------------------------------------------
   const BaseMonth = win.MozElements.CalendarMonthBaseView.prototype;
   const MonthView = win.customElements.get("calendar-month-view").prototype;
@@ -590,6 +734,23 @@ function patchWindow(win, H) {
     }
   });
 
+  // ----- today pane header (day number and "Mon YYYY") ---------------------
+  const TodayPane = win.TodayPane;
+  if (TodayPane && typeof TodayPane.setDay == "function") {
+    const origSetDay = TodayPane.setDay;
+    p(TodayPane, "setDay", function (aNewDate, aDontUpdateMinimonth) {
+      origSetDay.call(this, aNewDate, aDontUpdateMinimonth);
+      if (this.start) {
+        const js = toJS(dtToPD(this.start));
+        win.document.getElementById("datevalue-label").value = format({ day: "numeric" }, js);
+        win.document.getElementById("monthNameContainer").value = format(
+          { month: "short", year: "numeric" },
+          js
+        );
+      }
+    });
+  }
+
   // ----- today pane mini date ----------------------------------------------
   const Minidate = win.customElements.get("calendar-minidate");
   if (Minidate) {
@@ -614,10 +775,26 @@ function patchWindow(win, H) {
 /** Re-render what is already on screen after patching or unpatching. */
 function refreshWindow(win) {
   for (const mm of win.document.querySelectorAll("calendar-minimonth")) {
-    if (mm.dayBoxes) {
+    if (mm.dayBoxes && !isGregorianMinimonth(mm)) {
       // Same as the minimonth's own reaction to a preference change.
       mm.dayBoxes.clear();
       mm.refreshDisplay();
+    }
+  }
+  for (const dp of win.document.querySelectorAll("datepicker")) {
+    try {
+      if (dp._menulist && !dp._valueIsForever) {
+        dp._inputBoxValue = dp._minimonthValue; // re-render the text field
+      }
+    } catch (ex) {
+      // not initialised yet
+    }
+  }
+  if (win.TodayPane?.start) {
+    try {
+      win.TodayPane.setDay(win.TodayPane.start, true); // re-render the header labels
+    } catch (ex) {
+      // today pane not ready
     }
   }
   // Weekday/date header labels cache their text; re-assign so they re-read the formatter.
@@ -657,7 +834,67 @@ function refreshWindow(win) {
 // enable / disable
 // ---------------------------------------------------------------------------
 
+/** Every open chrome window and the chrome iframes inside it. */
+function* chromeWindowsDeep() {
+  const walk = function* (w) {
+    yield w;
+    let count = 0;
+    try {
+      count = w.frames.length;
+    } catch (ex) {
+      return;
+    }
+    for (let i = 0; i < count; i++) {
+      try {
+        yield* walk(w.frames[i]);
+      } catch (ex) {
+        // inaccessible frame
+      }
+    }
+  };
+  for (const w of Services.wm.getEnumerator(null)) {
+    yield* walk(w);
+  }
+}
+
+/**
+ * Patch a calendar document once its custom elements exist. Used for the main window and
+ * for the editor/dialog documents that hold date pickers.
+ */
+function applyToWindow(win, H, kind) {
+  if (patchedWindows.has(win)) {
+    return;
+  }
+  // "datepicker" itself is not a valid name for whenDefined() (no hyphen). datetimepickers.js
+  // defines it right after menulist-editable, and our callback is queued after its own.
+  const names = kind == "main" ? ["calendar-minimonth"] : ["calendar-minimonth", "menulist-editable"];
+  Promise.all(names.map(n => win.customElements.whenDefined(n))).then(
+    () => {
+      // Still enabled with the same settings, window still alive and not patched yet?
+      if (H !== currentHelpers || win.closed || patchedWindows.has(win)) {
+        return;
+      }
+      try {
+        patchWindow(win, H, kind);
+      } catch (ex) {
+        // Atomic: undo every patch (this window's partial ones and all the others).
+        log("error", "Mahoor: Persian calendar not applied, staying Gregorian:", ex);
+        rollbackAfterFailure();
+        return;
+      }
+      win.addEventListener("unload", () => patchedWindows.delete(win), { once: true });
+      refreshWindow(win);
+    },
+    ex => log("error", "Mahoor: calendar elements never became ready:", ex)
+  );
+}
+
 function disableAll() {
+  currentHelpers = null;
+  if (documentObserver) {
+    Services.obs.removeObserver(documentObserver, "chrome-document-loaded");
+    documentObserver = null;
+  }
   if (listenerRegistered) {
     ExtensionSupport.unregisterWindowListener(LISTENER_ID);
     listenerRegistered = false;
@@ -698,25 +935,46 @@ function enableAll(options) {
   const H = createHelpers(T, cal, options);
 
   try {
+    currentHelpers = H;
     patchFormatter(cal, H);
+
+    // The main window (calendar tab, today pane): the stock way to follow windows.
     listenerRegistered = true;
     ExtensionSupport.registerWindowListener(LISTENER_ID, {
       chromeURLs: [MESSENGER_URL],
       onLoadWindow(win) {
-        try {
-          patchWindow(win, H);
-        } catch (ex) {
-          // Atomic: undo this window's partial patches and the shared ones.
-          log("error", "Mahoor: Persian calendar not applied, staying Gregorian:", ex);
-          rollbackAfterFailure();
-          return;
-        }
-        refreshWindow(win);
+        applyToWindow(win, H, "main");
       },
       onUnloadWindow(win) {
         patchedWindows.delete(win);
       },
     });
+
+    // Documents with date pickers (event editor in a tab or dialog, recurrence, ...) are
+    // often iframes, which window listeners don't see: watch chrome document loads.
+    documentObserver = {
+      observe(subject) {
+        try {
+          const doc = subject.document ?? subject;
+          if (PICKER_URLS.includes(doc.documentURI) && doc.defaultView) {
+            applyToWindow(doc.defaultView, H, "picker");
+          }
+        } catch (ex) {
+          log("warn", "Mahoor: could not inspect a new document", ex);
+        }
+      },
+    };
+    Services.obs.addObserver(documentObserver, "chrome-document-loaded");
+    // ...and the ones that are already open.
+    for (const win of chromeWindowsDeep()) {
+      try {
+        if (PICKER_URLS.includes(win.document.documentURI) && win.document.readyState == "complete") {
+          applyToWindow(win, H, "picker");
+        }
+      } catch (ex) {
+        // not a window we can inspect
+      }
+    }
   } catch (ex) {
     log("error", "Mahoor: Persian calendar not applied, staying Gregorian:", ex);
     disableAll();
