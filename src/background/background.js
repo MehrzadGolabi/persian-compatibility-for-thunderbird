@@ -116,6 +116,28 @@ async function applyRtl(newPrefs) {
 }
 
 /*
+With the default "Automatic" send format Thunderbird sends a simple HTML message as plain text
+(it counts a bare dir="rtl" as "no formatting"), which would drop the direction we set while
+writing. So, when the message carries a right-to-left direction and the user has not picked a
+format, send HTML + text (what Automatic does for formatted mail). An explicit choice is kept.
+*/
+browser.compose.onBeforeSend.addListener(async (tab, details) => {
+  try {
+    if (
+      rtlPrefs.enabled &&
+      !details.isPlainText &&
+      (details.deliveryFormat || "auto") === "auto" &&
+      /<[a-z][^>]*\sdir=["']?rtl/i.test(details.body)
+    ) {
+      return { details: { deliveryFormat: "both" } };
+    }
+  } catch (e) {
+    onError(e);
+  }
+  return {};
+});
+
+/*
 (Re)create the column with the given settings. Called by the options page.
 */
 async function repaint(newSettings) {
