@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "Mahoor - Persian Suite",
+    "description": "Name of the add-on."
+  },
+  "extDescription": {
+    "message": "The Persian suite for Thunderbird: Persian (Jalali) dates in the message list, the calendar and its date pickers, and right-to-left reading and writing of email.",
+    "description": "Short description of the add-on."
+  }
+}

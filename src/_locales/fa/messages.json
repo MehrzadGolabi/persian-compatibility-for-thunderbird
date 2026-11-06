@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "ماهور - مجموعهٔ فارسی",
+    "description": "Name of the add-on."
+  },
+  "extDescription": {
+    "message": "مجموعهٔ فارسی تاندربرد: تاریخ شمسی در فهرست پیام‌ها، تقویم و انتخابگرهای تاریخ، و خواندن و نوشتن راست‌به‌چپ ایمیل.",
+    "description": "Short description of the add-on."
+  }
+}
